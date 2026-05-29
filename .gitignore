@@ -42,3 +42,17 @@ log/
 # Local development
 .env.local
 .env.*.local 
+# local config
+llm_backend/.env
+
+# local RAG data
+llm_backend/rag_uploads/
+llm_backend/rag_indexes/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# logs
+*.log

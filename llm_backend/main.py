@@ -17,10 +17,11 @@ from app.core.database import AsyncSessionLocal
 from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from sqlalchemy import select
-from app.services.conversation_service import ConversationService
+from app.services.simple_rag_service import SimpleRAGService
 import uuid
 import os
 from app.services.indexing_service import IndexingService
+from app.services.simple_rag_service import SimpleRAGService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
@@ -68,6 +69,12 @@ class RAGChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     index_id: str
     user_id: int
+
+class SimpleRAGQueryRequest(BaseModel):
+    question: str
+    index_id: str
+    user_id: int
+    top_k: int = 4
 
 class CreateConversationRequest(BaseModel):
     user_id: int
@@ -223,6 +230,60 @@ async def rag_chat_endpoint(request: RAGChatRequest):
         )
     except Exception as e:
         logger.error(f"RAG chat error for user {request.user_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rag/upload")
+async def simple_rag_upload(
+    file: UploadFile = File(...),
+    user_id: int = Form(...)
+):
+    """
+    最小可用 RAG：上传文档并生成 FAISS 向量索引
+    """
+    try:
+        logger.info(f"Simple RAG upload for user {user_id}: {file.filename}")
+
+        rag_service = SimpleRAGService()
+        saved_path = await rag_service.save_upload_file(file, user_id)
+
+        result = await rag_service.create_index(
+            file_path=saved_path,
+            original_name=file.filename,
+            user_id=user_id
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Simple RAG upload failed for user {user_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/rag/query")
+async def simple_rag_query(request: SimpleRAGQueryRequest):
+    """
+    最小可用 RAG：根据 index_id 检索文档并回答问题
+    """
+    try:
+        logger.info(f"Simple RAG query for user {request.user_id}, index_id={request.index_id}")
+
+        rag_service = SimpleRAGService()
+
+        result = await rag_service.answer(
+            question=request.question,
+            index_id=request.index_id,
+            user_id=request.user_id,
+            top_k=request.top_k
+        )
+
+        return result
+
+    except FileNotFoundError as e:
+        logger.error(f"Simple RAG index not found: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=404, detail=str(e))
+
+    except Exception as e:
+        logger.error(f"Simple RAG query failed for user {request.user_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/conversations")

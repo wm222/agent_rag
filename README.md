@@ -1,4 +1,4 @@
-# AssistGen - 基于大语言模型构建的智能客服系统
+# Assist-Agent - 基于大语言模型构建的智能客服系统
 
 一个基于 FastAPI 和 Vue 3 构建的前后端分离的智能客服助手项目，支持多种大语言模型，如DeepSeek V3，Qwen2.5系列，Llama3系列等。涵盖了 Agent、RAG 在智能客服领域的主流应用落地需求场景。 
 
@@ -7,7 +7,8 @@
 ### 1. 通用问答能力
 - **支持 DeepSeek V3 在线API**
 - **支持 使用 Ollama 接入任意对话模型，如Qwen2.5系列，Llama3系列**
-- **灵活的模配置**
+- **灵活的模型配置
+- **目前可使用的为ollama接入Qwen2.5 7B
 
 ### 2. 深度思考能力
 - **支持 DeepSeek R1 在线API**

@@ -286,6 +286,50 @@ async def simple_rag_query(request: SimpleRAGQueryRequest):
         logger.error(f"Simple RAG query failed for user {request.user_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/rag/indexes")
+async def simple_rag_list_indexes(user_id: int):
+    """
+    最小可用 RAG：列出当前用户的所有索引
+    """
+    try:
+        logger.info(f"List RAG indexes for user {user_id}")
+
+        rag_service = SimpleRAGService()
+        indexes = rag_service.list_indexes(user_id=user_id)
+
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "count": len(indexes),
+            "indexes": indexes
+        }
+
+    except Exception as e:
+        logger.error(f"List RAG indexes failed for user {user_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/rag/index/{index_id}")
+async def simple_rag_delete_index(index_id: str, user_id: int):
+    """
+    最小可用 RAG：删除当前用户的某个索引
+    """
+    try:
+        logger.info(f"Delete RAG index for user {user_id}, index_id={index_id}")
+
+        rag_service = SimpleRAGService()
+        result = rag_service.delete_index(index_id=index_id, user_id=user_id)
+
+        return result
+
+    except FileNotFoundError as e:
+        logger.error(f"RAG index not found: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=404, detail=str(e))
+
+    except Exception as e:
+        logger.error(f"Delete RAG index failed for user {user_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/conversations")
 async def create_conversation(request: CreateConversationRequest):
     """创建新会话"""

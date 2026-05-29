@@ -6,45 +6,55 @@
   <style>
     body {
       font-family: Arial, sans-serif;
-      max-width: 900px;
+      max-width: 1100px;
       margin: 40px auto;
       line-height: 1.6;
     }
+
     h1 {
       margin-bottom: 20px;
     }
+
     .box {
       border: 1px solid #ddd;
       padding: 20px;
       margin-bottom: 20px;
       border-radius: 8px;
     }
-    input, textarea, button {
+
+    input, textarea, button, select {
       font-size: 15px;
       margin-top: 8px;
       margin-bottom: 8px;
     }
+
     textarea {
       width: 100%;
       height: 90px;
     }
+
     button {
       padding: 8px 16px;
       cursor: pointer;
+      margin-right: 8px;
     }
+
     pre {
       background: #f5f5f5;
       padding: 12px;
       overflow-x: auto;
       white-space: pre-wrap;
     }
+
     .answer {
       background: #f8f8f8;
       padding: 12px;
       border-radius: 6px;
       border-left: 4px solid #999;
       white-space: pre-wrap;
+      min-height: 30px;
     }
+
     .context {
       background: #fafafa;
       padding: 10px;
@@ -52,17 +62,65 @@
       border: 1px solid #eee;
       border-radius: 6px;
     }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      font-size: 14px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f2f2f2;
+    }
+
+    .muted {
+      color: #777;
+      font-size: 14px;
+    }
+
+    .danger {
+      color: #b00020;
+    }
+
+    .success {
+      color: #057a29;
+    }
+
+    .small-btn {
+      padding: 4px 8px;
+      font-size: 13px;
+    }
+
+    .index-input {
+      width: 520px;
+    }
   </style>
 </head>
 <body>
   <h1>RAG 测试页面</h1>
 
   <div class="box">
-    <h2>1. 上传文档</h2>
+    <h2>0. 当前用户</h2>
     <div>
       用户 ID：
       <input id="userId" value="1" />
+      <button onclick="loadIndexes()">刷新索引列表</button>
     </div>
+    <p class="muted">
+      说明：这里的 user_id 要和后端保存索引时的 user_id 一致。你现在测试时通常使用 1。
+    </p>
+  </div>
+
+  <div class="box">
+    <h2>1. 上传文档</h2>
     <div>
       选择文件：
       <input id="fileInput" type="file" />
@@ -74,10 +132,17 @@
   </div>
 
   <div class="box">
-    <h2>2. 基于文档提问</h2>
+    <h2>2. 已有索引列表</h2>
+    <button onclick="loadIndexes()">刷新索引列表</button>
+    <div id="indexList"></div>
+  </div>
+
+  <div class="box">
+    <h2>3. 基于文档提问</h2>
+
     <div>
       index_id：
-      <input id="indexId" style="width: 500px;" placeholder="上传成功后会自动填入" />
+      <input id="indexId" class="index-input" placeholder="上传成功或点击索引后会自动填入" />
     </div>
 
     <div>
@@ -98,8 +163,32 @@
   </div>
 
   <script>
+    function getUserId() {
+      const value = document.getElementById("userId").value.trim();
+      if (!value) {
+        alert("请填写 user_id");
+        throw new Error("missing user_id");
+      }
+      return Number(value);
+    }
+
+    function formatTime(ts) {
+      if (!ts) return "";
+      const date = new Date(Number(ts) * 1000);
+      return date.toLocaleString();
+    }
+
+    async function parseJsonResponse(res) {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.detail || JSON.stringify(data);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
     async function uploadFile() {
-      const userId = document.getElementById("userId").value;
+      const userId = getUserId();
       const fileInput = document.getElementById("fileInput");
       const resultBox = document.getElementById("uploadResult");
 
@@ -120,19 +209,123 @@
           body: formData
         });
 
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
         resultBox.textContent = JSON.stringify(data, null, 2);
 
         if (data.index_id) {
           document.getElementById("indexId").value = data.index_id;
         }
+
+        await loadIndexes();
+
       } catch (err) {
-        resultBox.textContent = "上传失败：\n" + err;
+        resultBox.textContent = "上传失败：\n" + err.message;
+      }
+    }
+
+    async function loadIndexes() {
+      const userId = getUserId();
+      const listBox = document.getElementById("indexList");
+
+      listBox.innerHTML = "<p>正在加载索引列表...</p>";
+
+      try {
+        const res = await fetch(`/api/rag/indexes?user_id=${encodeURIComponent(userId)}`);
+        const data = await parseJsonResponse(res);
+
+        if (!data.indexes || data.indexes.length === 0) {
+          listBox.innerHTML = "<p class='muted'>当前用户还没有索引。</p>";
+          return;
+        }
+
+        const rows = data.indexes.map(item => {
+          const indexId = escapeHtml(item.index_id || "");
+          const name = escapeHtml(item.original_name || "");
+          const chunkCount = item.chunk_count ?? "";
+          const dim = item.dimension ?? "";
+          const createdAt = escapeHtml(formatTime(item.created_at));
+          const embeddingModel = escapeHtml(item.embedding_model || "");
+
+          return `
+            <tr>
+              <td>${name}</td>
+              <td><code>${indexId}</code></td>
+              <td>${chunkCount}</td>
+              <td>${dim}</td>
+              <td>${embeddingModel}</td>
+              <td>${createdAt}</td>
+              <td>
+                <button class="small-btn" onclick="selectIndex('${indexId}')">使用</button>
+                <button class="small-btn" onclick="deleteIndex('${indexId}')">删除</button>
+              </td>
+            </tr>
+          `;
+        }).join("");
+
+        listBox.innerHTML = `
+          <p class="success">共找到 ${data.count} 个索引。</p>
+          <table>
+            <thead>
+              <tr>
+                <th>文件名</th>
+                <th>index_id</th>
+                <th>chunk 数</th>
+                <th>维度</th>
+                <th>向量模型</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+        `;
+
+      } catch (err) {
+        listBox.innerHTML = `<p class="danger">加载索引失败：${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function selectIndex(indexId) {
+      document.getElementById("indexId").value = indexId;
+      document.getElementById("answer").textContent = "";
+      document.getElementById("contexts").innerHTML = "";
+      document.getElementById("queryResult").textContent = "";
+    }
+
+    async function deleteIndex(indexId) {
+      const userId = getUserId();
+
+      if (!confirm(`确定删除这个索引吗？\n${indexId}`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `/api/rag/index/${encodeURIComponent(indexId)}?user_id=${encodeURIComponent(userId)}`,
+          {
+            method: "DELETE"
+          }
+        );
+
+        const data = await parseJsonResponse(res);
+        alert(data.message || "删除成功");
+
+        const currentIndex = document.getElementById("indexId").value.trim();
+        if (currentIndex === indexId) {
+          document.getElementById("indexId").value = "";
+        }
+
+        await loadIndexes();
+
+      } catch (err) {
+        alert("删除失败：" + err.message);
       }
     }
 
     async function askQuestion() {
-      const userId = document.getElementById("userId").value;
+      const userId = getUserId();
       const indexId = document.getElementById("indexId").value.trim();
       const question = document.getElementById("question").value.trim();
 
@@ -141,7 +334,7 @@
       const rawBox = document.getElementById("queryResult");
 
       if (!indexId) {
-        alert("请先上传文档，或者填写 index_id");
+        alert("请先上传文档，或者从索引列表中选择一个 index_id");
         return;
       }
 
@@ -168,10 +361,10 @@
           })
         });
 
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
 
         rawBox.textContent = JSON.stringify(data, null, 2);
-        answerBox.textContent = data.answer || data.detail || "没有返回 answer 字段";
+        answerBox.textContent = data.answer || "没有返回 answer 字段";
 
         if (data.contexts && data.contexts.length > 0) {
           contextsBox.innerHTML = data.contexts.map((c, i) => `
@@ -182,6 +375,8 @@
               <br/>
               <strong>chunk_id:</strong> ${c.chunk_id}
               <br/>
+              <strong>来源:</strong> ${escapeHtml(c.metadata && c.metadata.source ? c.metadata.source : "")}
+              <br/>
               <strong>内容:</strong>
               <div>${escapeHtml(c.content)}</div>
             </div>
@@ -189,8 +384,9 @@
         } else {
           contextsBox.innerHTML = "<p>没有返回检索片段。</p>";
         }
+
       } catch (err) {
-        answerBox.textContent = "请求失败：\n" + err;
+        answerBox.textContent = "请求失败：\n" + err.message;
       }
     }
 
@@ -202,6 +398,10 @@
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
     }
+
+    window.addEventListener("load", () => {
+      loadIndexes().catch(() => {});
+    });
   </script>
 </body>
 </html>

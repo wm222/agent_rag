@@ -9,6 +9,7 @@ import aiohttp
 import faiss
 import numpy as np
 import PyPDF2
+import shutil
 
 from app.core.config import settings
 
@@ -180,6 +181,66 @@ class SimpleRAGService:
             meta = json.load(f)
 
         return index, chunks, meta
+
+    def list_indexes(self, user_id: int) -> List[Dict[str, Any]]:
+        """
+        列出当前用户已经创建的所有 RAG 索引
+        """
+        user_index_dir = self.index_root / f"user_{user_id}"
+
+        if not user_index_dir.exists():
+            return []
+
+        results = []
+
+        for index_dir in user_index_dir.iterdir():
+            if not index_dir.is_dir():
+                continue
+
+            meta_path = index_dir / "meta.json"
+
+            if not meta_path.exists():
+                continue
+
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+
+                results.append({
+                    "index_id": meta.get("index_id", index_dir.name),
+                    "user_id": meta.get("user_id", user_id),
+                    "original_name": meta.get("original_name", ""),
+                    "saved_path": meta.get("saved_path", ""),
+                    "embedding_model": meta.get("embedding_model", ""),
+                    "chat_model": meta.get("chat_model", ""),
+                    "chunk_count": meta.get("chunk_count", 0),
+                    "dimension": meta.get("dimension", 0),
+                    "created_at": meta.get("created_at", 0),
+                })
+
+            except Exception:
+                continue
+
+        results.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        return results
+
+    def delete_index(self, index_id: str, user_id: int) -> Dict[str, Any]:
+        """
+        删除当前用户的某个 RAG 索引
+        """
+        index_dir = self.index_root / f"user_{user_id}" / index_id
+
+        if not index_dir.exists():
+            raise FileNotFoundError(f"找不到索引: user_id={user_id}, index_id={index_id}")
+
+        shutil.rmtree(index_dir)
+
+        return {
+            "status": "success",
+            "message": "索引删除成功",
+            "user_id": user_id,
+            "index_id": index_id
+        }
 
     async def retrieve(self, question: str, index_id: str, user_id: int, top_k: int = 4):
         index, chunks, meta = self._load_index(index_id, user_id)

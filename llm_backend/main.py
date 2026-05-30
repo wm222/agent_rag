@@ -30,6 +30,7 @@ from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph
 from langgraph.types import Command
 import json
+import inspect
 
 
 # 配置上传目录 - RAG 功能的
@@ -121,91 +122,122 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/api/chat")
-# async def chat_endpoint(request: ChatMessage):
-#     """聊天接口"""
-#     try:
-#         logger.info(f"Processing chat request for user {request.user_id} in conversation {request.conversation_id}")
-#         chat_service = LLMFactory.create_chat_service()
-        
-#         return StreamingResponse(
-#             chat_service.generate_stream(
-#                 messages=request.messages,
-#                 user_id=request.user_id,
-#                 conversation_id=request.conversation_id,
-#                 on_complete=ConversationService.save_message
-#             ),
-#             media_type="text/event-stream"
-#         )
-#     except Exception as e:
-#         logger.error(f"Chat error: {str(e)}", exc_info=True)
-#         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/chat")
 async def chat_endpoint(request: ChatMessage):
+    """
+    主聊天接口：接入 LangGraph Agent Router。
+
+    主页面仍然请求 /api/chat，
+    但后端内部通过 LangGraph 自动路由到：
+    1. 普通聊天 chat
+    2. RAG 知识库问答 rag
+    3. 工具调用 tool
+    """
     try:
         logger.info(
-            f"Processing chat request for user {request.user_id} "
+            f"Processing LangGraph chat request for user {request.user_id} "
             f"in conversation {request.conversation_id}, "
             f"rag_enabled={request.rag_enabled}, "
             f"rag_index_id={request.rag_index_id}"
         )
-        if request.rag_enabled and request.rag_index_id:
+
+        question = ""
+        for msg in reversed(request.messages):
+            if msg.get("role") == "user":
+                question = msg.get("content", "")
+                break
+
+        if not question:
+            raise HTTPException(status_code=400, detail="没有找到用户问题")
+
+        agent_service = LangGraphRouterService()
+
+        result = await agent_service.run(
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+            question=question,
+            messages=request.messages,
+            rag_enabled=request.rag_enabled or False,
+            rag_index_id=request.rag_index_id,
+            top_k=request.top_k or 4,
+            force_route=None,
+        )
+
+        route = result.get("route", "chat")
+        answer = result.get("answer", "")
+
+        if route == "tool" and (
+            "知识库" in question
+            or "索引" in question
+            or "上传" in question
+            or "文档" in question
+        ):
             rag_service = SimpleRAGService()
+            index_result = rag_service.list_indexes(request.user_id)
 
-            question = ""
-            for msg in reversed(request.messages):
-                if msg.get("role") == "user":
-                    question = msg.get("content", "")
-                    break
+            if inspect.isawaitable(index_result):
+                index_result = await index_result
 
-            if not question:
-                raise HTTPException(status_code=400, detail="没有找到用户问题")
+            if isinstance(index_result, dict):
+                indexes = index_result.get("indexes", [])
+            elif isinstance(index_result, list):
+                indexes = index_result
+            else:
+                indexes = []
 
-            rag_result = await rag_service.answer(
-                question=question,
-                index_id=request.rag_index_id,
-                user_id=request.user_id,
-                top_k=request.top_k or 4
-            )
+            if indexes:
+                lines = [f"当前 user_id={request.user_id} 已有 {len(indexes)} 个知识库索引："]
+                for i, item in enumerate(indexes, start=1):
+                    name = (
+                        item.get("original_name")
+                        or item.get("filename")
+                        or item.get("name")
+                        or "未命名文档"
+                    )
+                    index_id = item.get("index_id", "")
+                    chunk_count = item.get("chunk_count", 0)
 
-            answer = rag_result.get("answer", "")
-            final_answer = f"【RAG知识库回答】\n\n{answer}"
+                    lines.append(
+                        f"{i}. {name}，index_id={index_id}，chunks={chunk_count}"
+                    )
 
-            await ConversationService.save_message(
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                messages=request.messages,
-                response=final_answer
-            )
+                answer = "\n".join(lines)
 
-            async def rag_stream():
-                text = final_answer.replace("\r", "").replace("\n", " ")
-                chunk_size = 24
+        route_name_map = {
+            "chat": "普通聊天",
+            "rag": "知识库问答",
+            "tool": "工具调用",
+        }
 
-                for i in range(0, len(text), chunk_size):
-                    yield f"data: {text[i:i + chunk_size]}\n\n"
+        route_name = route_name_map.get(route, route)
 
-                yield "data: [DONE]\n\n"
+        final_answer = f"【LangGraph-{route_name}】\n\n{answer}"
 
-            return StreamingResponse(
-                rag_stream(),
-                media_type="text/event-stream"
-            )
-        chat_service = LLMFactory.create_chat_service()
+        await ConversationService.save_message(
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+            messages=request.messages,
+            response=final_answer
+        )
+
+        async def agent_stream():
+            text = final_answer.replace("\r", "").replace("\n", " ")
+            chunk_size = 24
+
+            for i in range(0, len(text), chunk_size):
+                chunk = text[i:i + chunk_size]
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(
-            chat_service.generate_stream(
-                messages=request.messages,
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                on_complete=ConversationService.save_message
-            ),
+            agent_stream(),
             media_type="text/event-stream"
         )
 
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        logger.error(f"LangGraph chat error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/reason")
 async def reason_endpoint(request: ReasonRequest):

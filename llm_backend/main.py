@@ -22,6 +22,7 @@ import uuid
 import os
 from app.services.indexing_service import IndexingService
 from app.services.simple_rag_service import SimpleRAGService
+from app.services.conversation_service import ConversationService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
@@ -65,6 +66,11 @@ class ChatMessage(BaseModel):
     user_id: int
     conversation_id: int  # 添加会话ID字段
 
+    # 新增添加，主聊天页面接入 RAG 时使用
+    rag_enabled: Optional[bool] = False
+    rag_index_id: Optional[str] = None
+    top_k: Optional[int] = 4
+
 class RAGChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     index_id: str
@@ -99,12 +105,78 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/api/chat")
-async def chat_endpoint(request: ChatMessage):
-    """聊天接口"""
-    try:
-        logger.info(f"Processing chat request for user {request.user_id} in conversation {request.conversation_id}")
-        chat_service = LLMFactory.create_chat_service()
+# async def chat_endpoint(request: ChatMessage):
+#     """聊天接口"""
+#     try:
+#         logger.info(f"Processing chat request for user {request.user_id} in conversation {request.conversation_id}")
+#         chat_service = LLMFactory.create_chat_service()
         
+#         return StreamingResponse(
+#             chat_service.generate_stream(
+#                 messages=request.messages,
+#                 user_id=request.user_id,
+#                 conversation_id=request.conversation_id,
+#                 on_complete=ConversationService.save_message
+#             ),
+#             media_type="text/event-stream"
+#         )
+#     except Exception as e:
+#         logger.error(f"Chat error: {str(e)}", exc_info=True)
+#         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat")
+async def chat_endpoint(request: ChatMessage):
+    try:
+        logger.info(
+            f"Processing chat request for user {request.user_id} "
+            f"in conversation {request.conversation_id}, "
+            f"rag_enabled={request.rag_enabled}, "
+            f"rag_index_id={request.rag_index_id}"
+        )
+        if request.rag_enabled and request.rag_index_id:
+            rag_service = SimpleRAGService()
+
+            question = ""
+            for msg in reversed(request.messages):
+                if msg.get("role") == "user":
+                    question = msg.get("content", "")
+                    break
+
+            if not question:
+                raise HTTPException(status_code=400, detail="没有找到用户问题")
+
+            rag_result = await rag_service.answer(
+                question=question,
+                index_id=request.rag_index_id,
+                user_id=request.user_id,
+                top_k=request.top_k or 4
+            )
+
+            answer = rag_result.get("answer", "")
+            final_answer = f"【RAG知识库回答】\n\n{answer}"
+
+            await ConversationService.save_message(
+                user_id=request.user_id,
+                conversation_id=request.conversation_id,
+                messages=request.messages,
+                response=final_answer
+            )
+
+            async def rag_stream():
+                text = final_answer.replace("\r", "").replace("\n", " ")
+                chunk_size = 24
+
+                for i in range(0, len(text), chunk_size):
+                    yield f"data: {text[i:i + chunk_size]}\n\n"
+
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                rag_stream(),
+                media_type="text/event-stream"
+            )
+        chat_service = LLMFactory.create_chat_service()
+
         return StreamingResponse(
             chat_service.generate_stream(
                 messages=request.messages,
@@ -114,6 +186,7 @@ async def chat_endpoint(request: ChatMessage):
             ),
             media_type="text/event-stream"
         )
+
     except Exception as e:
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

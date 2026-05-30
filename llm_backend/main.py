@@ -23,6 +23,7 @@ import os
 from app.services.indexing_service import IndexingService
 from app.services.simple_rag_service import SimpleRAGService
 from app.services.conversation_service import ConversationService
+from app.services.langgraph_router_service import LangGraphRouterService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
@@ -70,6 +71,21 @@ class ChatMessage(BaseModel):
     rag_enabled: Optional[bool] = False
     rag_index_id: Optional[str] = None
     top_k: Optional[int] = 4
+
+# 新增添加
+class AgentChatRequest(BaseModel):
+    user_id: int
+    question: str
+    conversation_id: Optional[int] = None
+    messages: Optional[List[Dict[str, str]]] = None
+
+    rag_enabled: Optional[bool] = False
+    rag_index_id: Optional[str] = None
+    top_k: Optional[int] = 4
+
+    # 可选：强制指定路由，方便测试
+    # chat / rag / tool
+    force_route: Optional[str] = None
 
 class RAGChatRequest(BaseModel):
     messages: List[Dict[str, str]]
@@ -357,6 +373,52 @@ async def simple_rag_query(request: SimpleRAGQueryRequest):
 
     except Exception as e:
         logger.error(f"Simple RAG query failed for user {request.user_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 新增添加
+@app.post("/api/agent/chat")
+async def agent_chat_endpoint(request: AgentChatRequest):
+    """
+    LangGraph 轻量级 Agent 接口。
+
+    根据用户问题自动路由到：
+    1. 普通聊天
+    2. RAG 知识库问答
+    3. 工具调用
+    """
+    try:
+        question = request.question
+
+        messages = request.messages or [
+            {"role": "user", "content": question}
+        ]
+
+        agent_service = LangGraphRouterService()
+
+        result = await agent_service.run(
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+            question=question,
+            messages=messages,
+            rag_enabled=request.rag_enabled or False,
+            rag_index_id=request.rag_index_id,
+            top_k=request.top_k or 4,
+            force_route=request.force_route,
+        )
+
+        # 如果传入 conversation_id，则顺便保存到原会话记录
+        if request.conversation_id:
+            await ConversationService.save_message(
+                user_id=request.user_id,
+                conversation_id=request.conversation_id,
+                messages=messages,
+                response=result.get("answer", "")
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Agent chat error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/rag/indexes")

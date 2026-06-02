@@ -1,26 +1,22 @@
-# Assist-Agent - 基于大语言模型构建的智能客服系统
+# Assist-Agent-RAG - 基于本地大模型的 RAG Agent 问答系统
+Assist-Agent-RAG 是一个基于 FastAPI、Ollama、FAISS 和 LangGraph 构建的本地 RAG Agent 问答系统。
+接入 qwen2.5:7b 作为本地聊天模型，使用 bge-m3 作为文本向量模型，同时还可支持切换多种大语言模型，如DeepSeek V3、Llama3系列等。
+本项目支持用户注册登录、普通聊天、文档上传、知识库问答、工具调用等功能。
 
-一个基于 FastAPI 和 Vue 3 构建的前后端分离的智能客服助手项目，支持多种大语言模型，如DeepSeek V3，Qwen2.5系列，Llama3系列等。涵盖了 Agent、RAG 在智能客服领域的主流应用落地需求场景。 
+## 项目功能
 
-## 功能特性
+### 1. 普通聊天
+用户可以在主页面直接进行问题搜索
+![alt text](image-1.png)
 
-### 1. 通用问答能力
-- **支持 DeepSeek V3 在线API**
-- **支持 使用 Ollama 接入任意对话模型，如Qwen2.5系列，Llama3系列**
-- **灵活的模型配置
-- **目前可使用的为ollama接入Qwen2.5 7B
+### 2. 知识库问答
+用户可以上传文档，本系统根据文档内容进行回答
+![alt text](image-2.png)
 
-### 2. 深度思考能力
-- **支持 DeepSeek R1 在线API**
-- **支持 使用 Ollama 接入任意 Deepseek r1 模型系列**
-- **灵活的模配置**
-
-
-### 3. ollama 性能测试工具
-- 单请求性能测试
-- 并发性能测试
-- 系统资源监控
-- 自动化测试报告
+### 3. 工具调用
+项目基于 LangGraph 实现了轻量级 Agent Router，可以根据用户问题自动选择不同处理流程，目前在工具调用方面主要实现了天气预报功能。
+![alt text](image-3.png)
+![alt text](image-4.png)
 
 ## 快速启动
 
@@ -50,9 +46,10 @@ CHAT_SERVICE=OLLAMA  # 或 DEEPSEEK
 REASON_SERVICE=OLLAMA  # 或 DEEPSEEK
 
 # Ollama 配置
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_CHAT_MODEL=deepseek-coder:6.7b
-OLLAMA_REASON_MODEL=deepseek-coder:6.7b
+OLLAMA_CHAT_MODEL=qwen2.5:7b   # 聊天模型
+OLLAMA_REASON_MODEL=qwen2.5:7b  # 推理模型
+OLLAMA_AGENT_MODEL=qwen2.5:7b  # Agent模型
+OLLAMA_EMBEDDING_MODEL=bge-m3  # 词向量模型
 
 # DeepSeek 配置（如果使用）
 DEEPSEEK_API_KEY=your-api-key
@@ -61,198 +58,32 @@ DEEPSEEK_MODEL=deepseek-chat
 ```
 ### 3. 安装Mysql数据库并在 `.env` 文件中配置数据库连接信息
 
-### 4. 启动服务
+### 4. 启动！！！
 
 ```bash
-# 进入后端目录
+# 启动 MySQL、Redis、Ollama服务
+service mysql start  
+service redis-server start
+nohup ollama serve > /tmp/ollama.log 2>&1 &
+
+# 检查 Ollama、Redis服务是否启动成功
+curl http://127.0.0.1:11434/api/tags
+redis-cli ping
+
+# 启动！！！
 cd llm_backend
-
-# 启动服务（默认端口 9000）
 python run.py
-
-# 如果需要修改 IP 和端口，编辑 run.py 中的配置：
-uvicorn.run(
-    "main:app",
-    host="0.0.0.0",  # 修改监听地址
-    port=8000,       # 修改端口号
-    access_log=False,
-    log_level="error",
-    reload=True
-)
 ```
 
 服务启动后可以访问：
-- API 文档：http://localhost:8000/docs
 - 前端界面：http://localhost:8000
 
 ## 技术栈
-
-- 后端：
-  - FastAPI
-  - SQLAlchemy
-  - MySQL
-  - Ollama/DeepSeek
-
-- 前端：
-  - Vue 3
-  - Element Plus
-  - TypeScript
-
-## 注意事项
-
-1. 生产环境部署时：
-   - 修改 `.env` 中的 `SECRET_KEY`
-   - 配置正确的 CORS 设置
-   - 使用 HTTPS
-   - 关闭 `reload=True`
-
-2. 开发环境：
-   - 可以启用 `reload=True` 实现热重载
-   - 可以设置 `log_level="debug"` 查看更多日志
-
-## License
-
-MIT 
-
-# 电商商品数据服务
-
-这个项目提供了一个简单的Python服务，用于从Neo4j图数据库中获取电商商品信息，并通过API或Web界面将其展示给前端。
-
-## 数据库结构
-
-项目使用Neo4j图数据库存储电商相关数据，主要包含以下节点和关系：
-
-### 节点 (Nodes)
-
-1. **Product** - 商品
-   - ProductID: 商品ID
-   - ProductName: 商品名称
-   - UnitPrice: 单价
-   - UnitsInStock: 库存数量
-   - UnitsOnOrder: 订购数量
-   - QuantityPerUnit: 单位数量
-   - Discontinued: 是否停产
-
-2. **Category** - 商品类别
-   - CategoryID: 类别ID
-   - CategoryName: 类别名称
-   - Description: 类别描述
-
-3. **Supplier** - 供应商
-   - SupplierID: 供应商ID
-   - CompanyName: 公司名称
-   - ContactName: 联系人姓名
-   - Phone: 联系电话
-
-4. **Customer** - 客户
-   - CustomerID: 客户ID
-   - CompanyName: 公司名称
-   - ContactName: 联系人姓名
-
-5. **Order** - 订单
-   - OrderID: 订单ID
-   - OrderDate: 订单日期
-
-6. **Review** - 评论
-   - ReviewID: 评论ID
-   - ReviewText: 评论内容
-   - Rating: 评分
-   - ReviewDate: 评论日期
-
-### 关系 (Relationships)
-
-1. **BELONGS_TO** - 商品属于类别: (Product)-[:BELONGS_TO]->(Category)
-2. **SUPPLIED_BY** - 商品由供应商提供: (Product)-[:SUPPLIED_BY]->(Supplier)
-3. **CONTAINS** - 订单包含商品: (Order)-[:CONTAINS]->(Product)
-4. **PLACED** - 客户下订单: (Customer)-[:PLACED]->(Order)
-5. **WROTE** - 客户写评论: (Customer)-[:WROTE]->(Review)
-6. **ABOUT** - 评论关于商品: (Review)-[:ABOUT]->(Product)
-
-## 文件说明
-
-项目包含两个主要文件：
-
-1. **product_service.py** - 提供与Neo4j数据库交互的服务类，封装了各种查询商品信息的方法
-2. **frontend_demo.py** - 基于Flask的Web应用，提供Web界面和API端点，使用product_service获取数据
-
-## 安装依赖
-
-```bash
-pip install neo4j flask
-```
-
-## 配置数据库连接
-
-默认连接参数:
-- URI: `bolt://localhost:7687`
-- 用户名: `neo4j`
-- 密码: `password`
-- 数据库: `neo4j`
-
-可以通过两种方式修改:
-
-1. 在代码中直接修改
-2. 设置环境变量:
-   ```bash
-   export NEO4J_URI=bolt://localhost:7687
-   export NEO4J_USERNAME=neo4j
-   export NEO4J_PASSWORD=your_password
-   export NEO4J_DATABASE=neo4j
-   ```
-
-## 使用ProductService
-
-```python
-from product_service import ProductService
-
-# 创建服务实例
-service = ProductService(
-    uri="bolt://localhost:7687",
-    username="neo4j",
-    password="password"
-)
-
-# 使用上下文管理器自动处理连接
-with service:
-    # 获取类别
-    categories = service.get_all_categories()
-    print(f"类别数量: {len(categories)}")
-    
-    # 根据类别获取商品
-    products = service.get_products_by_category("智能音箱")
-    print(f"智能音箱类别下的商品数量: {len(products)}")
-    
-    # 获取商品详情
-    product_details = service.get_product_details(1)
-    print(f"商品详情: {product_details}")
-    
-    # 搜索商品
-    search_results = service.search_products("智能")
-    print(f"搜索结果数量: {len(search_results)}")
-```
-
-## 运行Web应用
-
-```bash
-python frontend_demo.py
-```
-
-访问 http://localhost:5000 查看Web应用。
-
-## API端点
-
-以下是可用的API端点:
-
-- `GET /api/categories` - 获取所有商品类别
-- `GET /api/products/category/<category_name>` - 获取指定类别下的商品
-- `GET /api/products/<product_id>` - 获取指定商品的详细信息
-- `GET /api/products/search?keyword=<keyword>` - 搜索商品
-- `GET /api/products/featured` - 获取推荐商品
-- `GET /api/products/popular` - 获取热门商品
-- `GET /api/products/<product_id>/reviews` - 获取指定商品的评论
-
-## 注意事项
-
-1. 请确保Neo4j数据库已启动并已导入相关电商数据
-2. 若要在生产环境使用，请确保添加适当的认证和安全机制
-3. Web模板(HTML文件)需要自行创建在templates目录下 
+- Python
+- FastAPI
+- Redis
+- MySQL
+- LangGraph
+- FAISS
+- RAG
+  

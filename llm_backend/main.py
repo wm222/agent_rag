@@ -438,7 +438,6 @@ async def agent_chat_endpoint(request: AgentChatRequest):
             force_route=request.force_route,
         )
 
-        # 如果传入 conversation_id，则顺便保存到原会话记录
         if request.conversation_id:
             await ConversationService.save_message(
                 user_id=request.user_id,

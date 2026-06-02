@@ -6,6 +6,7 @@ import aiohttp
 from langgraph.graph import StateGraph, END
 
 from app.services.simple_rag_service import SimpleRAGService
+from app.services.weather_service import WeatherService
 
 
 class AgentState(TypedDict, total=False):
@@ -32,7 +33,7 @@ class LangGraphRouterService:
     当前支持三个分支：
     1. chat：普通聊天
     2. rag：知识库问答
-    3. tool：工具调用，目前先实现查询知识库索引列表
+    3. tool：工具调用，支持知识库索引查询和天气查询
     """
 
     def __init__(self):
@@ -63,6 +64,53 @@ class LangGraphRouterService:
         workflow.add_edge("tool", END)
 
         self.graph = workflow.compile()
+
+    def _is_weather_query(self, question: str) -> bool:
+        """
+        判断用户问题是否属于天气查询。
+        """
+        q = (question or "").lower()
+        weather_keywords = [
+            "天气",
+            "气温",
+            "温度",
+            "下雨",
+            "降雨",
+            "会不会下雨",
+            "冷不冷",
+            "热不热",
+            "风速",
+            "湿度",
+            "weather",
+            "temperature",
+            "rain",
+        ]
+        return any(keyword in q for keyword in weather_keywords)
+
+    def _extract_weather_location(self, question: str) -> str:
+        """
+        从天气问题中简单抽取地点。
+
+        示例：
+        - 北京今天的天气怎么样？ -> 北京
+        - 上海明天会不会下雨？ -> 上海
+        - 查一下广州温度 -> 广州
+        """
+        q = (question or "").strip()
+
+        remove_words = [
+            "今天", "明天", "后天", "这几天", "最近", "未来三天", "未来3天",
+            "天气", "气温", "温度", "下雨", "降雨", "雨", "风速", "湿度",
+            "怎么样", "如何", "查询", "查一下", "帮我查一下", "帮我看一下", "看一下",
+            "会不会", "冷不冷", "热不热", "现在", "当前",
+            "weather", "temperature", "rain",
+            "的", "？", "?", "。", "，", ",", "！", "!",
+        ]
+
+        for word in remove_words:
+            q = q.replace(word, "")
+
+        return q.strip()
 
     async def run(
         self,
@@ -103,12 +151,6 @@ class LangGraphRouterService:
         }
 
     async def router_node(self, state: AgentState) -> Dict[str, Any]:
-        """
-        路由节点：判断问题应该走普通聊天、RAG，还是工具调用。
-
-        第一版先用规则路由，稳定、容易解释。
-        后续可以升级为 LLM Router。
-        """
         question = state.get("question", "") or ""
         force_route = state.get("force_route")
 
@@ -147,14 +189,16 @@ class LangGraphRouterService:
             "文中",
         ]
 
+        # 天气问题优先走 tool 分支。
+        if self._is_weather_query(question):
+            return {"route": "tool"}
+
         if any(k in q for k in tool_keywords):
             return {"route": "tool"}
 
-        # 如果用户显式开启了 RAG 并且已有索引，则优先走 RAG
         if state.get("rag_enabled") and state.get("rag_index_id"):
             return {"route": "rag"}
 
-        # 如果问题明显是在问文档，且有索引，也走 RAG
         if any(k in q for k in rag_keywords) and state.get("rag_index_id"):
             return {"route": "rag"}
 
@@ -176,7 +220,6 @@ class LangGraphRouterService:
             {"role": "user", "content": state.get("question", "")}
         ]
 
-        # 加一个轻量 system prompt，避免模型忘记身份
         final_messages = [
             {
                 "role": "system",
@@ -238,17 +281,76 @@ class LangGraphRouterService:
 
     async def tool_node(self, state: AgentState) -> Dict[str, Any]:
         """
-        工具节点：当前先实现查询当前用户已有知识库索引。
+        工具节点：
+        1. 天气查询
+        2. 知识库索引列表查询
         """
-        rag_service = SimpleRAGService()
+        question = state.get("question", "") or ""
         user_id = state.get("user_id")
 
+        # 1. 天气查询工具
+        if self._is_weather_query(question):
+            location = self._extract_weather_location(question)
+
+            if not location:
+                return {
+                    "route": "tool",
+                    "answer": "请告诉我要查询哪个城市的天气，例如：北京今天的天气怎么样？",
+                    "tool_result": {
+                        "tool": "weather",
+                        "status": "missing_location",
+                    },
+                }
+
+            try:
+                weather_service = WeatherService()
+                weather_result = await weather_service.get_weather(location)
+            except Exception as e:
+                return {
+                    "route": "tool",
+                    "answer": f"天气查询失败：{str(e)}",
+                    "tool_result": {
+                        "tool": "weather",
+                        "status": "exception",
+                        "error": str(e),
+                    },
+                }
+
+            if weather_result.get("status") != "success":
+                return {
+                    "route": "tool",
+                    "answer": weather_result.get("message", "天气查询失败，请稍后再试。"),
+                    "tool_result": {
+                        "tool": "weather",
+                        "status": "error",
+                        "raw": weather_result,
+                    },
+                }
+
+            return {
+                "route": "tool",
+                "answer": weather_result.get("answer", "天气查询成功，但没有生成可展示的回答。"),
+                "tool_result": {
+                    "tool": "weather",
+                    "status": "success",
+                    "raw": weather_result,
+                },
+            }
+
+        # 2. 知识库索引查询工具
+        rag_service = SimpleRAGService()
         result = rag_service.list_indexes(user_id)
 
         if inspect.isawaitable(result):
             result = await result
 
-        indexes = result.get("indexes", []) if isinstance(result, dict) else []
+        # SimpleRAGService.list_indexes 直接返回 list；这里兼容 dict/list 两种情况。
+        if isinstance(result, dict):
+            indexes = result.get("indexes", [])
+        elif isinstance(result, list):
+            indexes = result
+        else:
+            indexes = []
 
         if not indexes:
             answer = "当前用户还没有可用的知识库索引。可以先上传文档建立索引。"
